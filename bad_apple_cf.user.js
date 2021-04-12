@@ -5,7 +5,7 @@
 // @grant       GM_getResourceURL
 // @grant       GM.getResourceURL
 // @grant       GM.getResourceUrl
-// @version     0.1.0
+// @version     0.1.1
 // @author      meooow
 // @description Bad Apple!!
 // @resource    bad_apple.mp3 https://raw.githubusercontent.com/meooow25/bad-apple-cf/86fa050d521bcdd87444713237e7dfd39821c993/bad_apple.mp3
@@ -32,19 +32,14 @@
     // Not all profiles have activity graphs
     return;
   }
-  let svg;
-  while (true) {
-    // The SVG gets added by JS later
-    svg = graph.querySelector("svg");
-    if (svg) {
-      break;
-    }
-    await delay(100);
+  
+  function getSvg() {
+    const svg = graph.querySelector("svg");
+    const parentG = svg.querySelector("g");
+    const cols = Array.from(parentG.querySelectorAll("g"));  // 52+1 cols of 7 days each
+    const col53 = cols.pop();
+    return { svg, cols, col53 };
   }
-
-  const parentG = svg.querySelector("g");
-  const cols = Array.from(parentG.querySelectorAll("g"));  // 52+1 cols of 7 days each
-  const col53 = cols.pop();
 
   const opacityAnimDur = 300;
   const fillAnimDur = 300;
@@ -66,6 +61,7 @@
   async function setupCells(forward = true) {
     const svgns = "http://www.w3.org/2000/svg";
     const cellOffset = 13;
+    const { svg, cols, col53 } = getSvg();
 
     function newCell(y) {
       const rect = document.createElementNS(svgns, "rect");
@@ -73,14 +69,22 @@
       rect.setAttribute("height", 11);
       rect.setAttribute("y", y);
       rect.setAttribute("fill", "#EBEDF0");
-      rect.classList.add("opacity-anim");
+      rect.classList.add("opacity-anim", "new-cell");
       rect.setAttribute("opacity", 0.01);
       return rect;
     }
 
-    if (forward && !svg.querySelector(".opacity-anim")) {  // Only run first time
+    if (forward) {
+      // First row may have less than 7 days
+      const col1 = cols[0];
+      let cnt = col1.querySelectorAll("rect").length;
+      let y = col1.querySelector("rect").getAttribute("y");
+      for (let i = cnt; i < 7; i++) {
+        y -= cellOffset;
+        col1.insertBefore(newCell(y), col1.firstChild);
+      }
       // Already 7 days, need 39 for 52x39 display
-      let y = 78; // Last y
+      y = 78; // Last y
       for (let i = 7; i < 39; i++) {
         y += cellOffset;
         for (const col of cols) {
@@ -90,7 +94,8 @@
       // To hide col 53
       col53.classList.add("opacity-anim");
     }
-    forceRestyle(parentG);
+
+    forceRestyle(svg);
     if (forward) {
       svg.querySelectorAll("rect.opacity-anim").forEach(cell => cell.setAttribute("opacity", 1));
       col53.setAttribute("opacity", 0);
@@ -98,13 +103,19 @@
       svg.querySelectorAll("rect.opacity-anim").forEach(cell => cell.setAttribute("opacity", 0));
       col53.setAttribute("opacity", 1);
     }
-
     await delay(opacityAnimDur);
+
+    if (!forward) {
+      svg.querySelectorAll(".new-cell").forEach(cell => cell.parentNode.removeChild(cell));
+      col53.classList.remove("opacity-anim");
+    }
   }
 
   async function expandGraph(forward = true) {
     // Ideally would animate the viewBox but can't in a simple enough way
     // Expanding the containing div instead
+
+    const { svg } = getSvg();
 
     function getHeight(el) {
       return Number(getComputedStyle(el).height.slice(0, -2)); // remove px suffix
@@ -134,6 +145,18 @@
     graph.style.height = null;
   }
 
+  function disableSelects(forward = true) {
+    // Disable selects to prevent the svg from being swapped out during animation
+    const selects = document.querySelectorAll("._UserActivityFrame_selector select");
+    for (const el of selects) {
+      if (forward) {
+        el.setAttribute("disabled", "");
+      } else {
+        el.removeAttribute("disabled");
+      }
+    }
+  }
+
   async function setupAudio() {
     const audioUrl = await gm.getResourceURL("bad_apple.mp3");
     const source = document.createElement("source");
@@ -144,7 +167,6 @@
     return audio;
   }
 
-  let firstTimeSetupVideo = true;
   async function setupVideo() {
     const frameDataUrl = await gm.getResourceURL("frames.json");
     let { fps, frames } = await fetch(frameDataUrl).then(r => r.json());
@@ -158,36 +180,32 @@
       "#216E39",
     ];
 
-    let resetFill;
+    let svg;
     let grid;
+    let originalFills;
     let timerIds;
-
-    function setCell(x, y, idx) {
-      grid[x][y].setAttribute("fill", palette[idx]);
-    }
 
     async function transitionCellFills(fun) {
       grid.flat().forEach(cell => cell.classList.add("fill-anim"));
-      forceRestyle(parentG);
+      forceRestyle(svg);
       fun();
       await delay(fillAnimDur);
       grid.flat().forEach(cell => cell.classList.remove("fill-anim"));
     }
 
     async function beforePlay() {
-      if (firstTimeSetupVideo) {
-        grid = [];
-        resetFill = [];
-        for (const col of cols) {
-          const gcol = [];
-          for (const cell of col.children) {
-            gcol.push(cell);
-            const fill = cell.getAttribute("fill");
-            resetFill.push(() => cell.setAttribute("fill", fill));
-          }
-          grid.push(gcol);
+      const { svg: svg_, cols } = getSvg();
+      svg = svg_;
+
+      grid = [];
+      originalFills = [];
+      for (const col of cols) {
+        const gridCol = [];
+        for (const cell of col.querySelectorAll("rect")) {
+          gridCol.push(cell);
+          originalFills.push([cell, cell.getAttribute("fill")]);
         }
-        firstTimeSetupVideo = false;
+        grid.push(gridCol);
       }
 
       await transitionCellFills(() => {
@@ -201,7 +219,7 @@
       const delayMs = 1000 / fps;
       function drawFrame(frameNum) {
         for (const [x, y, i] of frames[frameNum]) {
-          setCell(x, y, i);
+          grid[x][y].setAttribute("fill", palette[i]);
         }
         if (frameNum === frames.length - 1) {
           const actual = performance.now() - start;
@@ -222,8 +240,10 @@
 
     async function afterStop() {
       await transitionCellFills(() => {
-        resetFill.forEach(reset => reset());
+        originalFills.forEach(([cell, fill]) => cell.setAttribute("fill", fill));
       });
+      grid = null;
+      originalFills = null;
     }
 
     return { beforePlay, play, stop, afterStop };
@@ -246,6 +266,7 @@
 
   audio.addEventListener("playing", () => video.play());
   async function playAll() {
+    disableSelects();
     await expandGraph();
     await setupCells();
     await video.beforePlay();
@@ -261,6 +282,7 @@
     await video.afterStop();
     await setupCells(false);
     await expandGraph(false);
+    disableSelects(false);
     button.textContent = "Play";
     state = "stopped";
   }
