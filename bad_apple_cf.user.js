@@ -5,7 +5,7 @@
 // @grant       GM_getResourceURL
 // @grant       GM.getResourceURL
 // @grant       GM.getResourceUrl
-// @version     0.1.1
+// @version     0.1.2
 // @author      meooow
 // @description Bad Apple!!
 // @resource    bad_apple.mp3 https://raw.githubusercontent.com/meooow25/bad-apple-cf/86fa050d521bcdd87444713237e7dfd39821c993/bad_apple.mp3
@@ -62,6 +62,7 @@
     const svgns = "http://www.w3.org/2000/svg";
     const cellOffset = 13;
     const { svg, cols, col53 } = getSvg();
+    const col1 = cols[0], col52 = cols[51];
 
     function newCell(y) {
       const rect = document.createElementNS(svgns, "rect");
@@ -75,14 +76,22 @@
     }
 
     if (forward) {
-      // First row may have less than 7 days
-      const col1 = cols[0];
+      // First column may have less than 7 days
       let cnt = col1.querySelectorAll("rect").length;
-      let y = col1.querySelector("rect").getAttribute("y");
+      let y = Number(col1.querySelector("rect").getAttribute("y"));
       for (let i = cnt; i < 7; i++) {
         y -= cellOffset;
         col1.insertBefore(newCell(y), col1.firstChild);
       }
+
+      // 52nd column may have less than 7 days
+      cnt = col52.querySelectorAll("rect").length;
+      y = Number(col52.querySelector("rect:last-child").getAttribute("y"));
+      for (let i = cnt; i < 7; i++) {
+        y += cellOffset;
+        col52.appendChild(newCell(y));
+      }
+
       // Already 7 days, need 39 for 52x39 display
       y = 78; // Last y
       for (let i = 7; i < 39; i++) {
@@ -91,6 +100,7 @@
           col.appendChild(newCell(y));
         }
       }
+
       // To hide col 53
       col53.classList.add("opacity-anim");
     }
