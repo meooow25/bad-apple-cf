@@ -5,11 +5,11 @@
 // @grant       GM_getResourceURL
 // @grant       GM.getResourceURL
 // @grant       GM.getResourceUrl
-// @version     0.1.2
+// @version     0.1.3
 // @author      meooow
 // @description Bad Apple!!
-// @resource    bad_apple.mp3 https://raw.githubusercontent.com/meooow25/bad-apple-cf/86fa050d521bcdd87444713237e7dfd39821c993/bad_apple.mp3
-// @resource    frames.json https://raw.githubusercontent.com/meooow25/bad-apple-cf/86fa050d521bcdd87444713237e7dfd39821c993/frames.json
+// @resource    bad_apple.mp3 https://raw.githubusercontent.com/meooow25/bad-apple-cf/c153a5888e16d426a9c6d2cf6558e70e06f22a5d/bad_apple.mp3
+// @resource    frames.json https://raw.githubusercontent.com/meooow25/bad-apple-cf/c153a5888e16d426a9c6d2cf6558e70e06f22a5d/frames.json
 // ==/UserScript==
 
 (async function() {
@@ -32,7 +32,7 @@
     // Not all profiles have activity graphs
     return;
   }
-  
+
   function getSvg() {
     const svg = graph.querySelector("svg");
     const parentG = svg.querySelector("g");
@@ -54,6 +54,7 @@
     .play-button {
       font-family: verdana, arial, sans-serif;
       font-size: 1em;
+      margin-right: 1em;
     }
   `;
   document.head.appendChild(style);
@@ -181,6 +182,18 @@
     const frameDataUrl = await gm.getResourceURL("frames.json");
     let { fps, frames } = await fetch(frameDataUrl).then(r => r.json());
 
+    frames = frames.map((frame) => {
+      // Decode run length encoding
+      const out = [];
+      for (let i = 0; i < frame.length; i += 2) {
+        for (let j = 0; j < frame[i + 1]; j++) {
+          out.push(frame[i]);
+        }
+      }
+      return out;
+    });
+    const frameDurationMs = 1000 / fps;
+
     // Frames use the 5-color palette used by CF
     const palette = [
       "#EBEDF0",
@@ -191,68 +204,85 @@
     ];
 
     let svg;
-    let grid;
+    let cells;
     let originalFills;
-    let timerIds;
+    let playing;
+    let drawnFrames;
 
     async function transitionCellFills(fun) {
-      grid.flat().forEach(cell => cell.classList.add("fill-anim"));
+      cells.forEach(cell => cell.classList.add("fill-anim"));
       forceRestyle(svg);
       fun();
       await delay(fillAnimDur);
-      grid.flat().forEach(cell => cell.classList.remove("fill-anim"));
+      cells.forEach(cell => cell.classList.remove("fill-anim"));
     }
 
     async function beforePlay() {
       const { svg: svg_, cols } = getSvg();
       svg = svg_;
 
-      grid = [];
+      cells = [];
       originalFills = [];
       for (const col of cols) {
-        const gridCol = [];
         for (const cell of col.querySelectorAll("rect")) {
-          gridCol.push(cell);
+          cells.push(cell);
           originalFills.push([cell, cell.getAttribute("fill")]);
         }
-        grid.push(gridCol);
       }
 
       await transitionCellFills(() => {
-        grid.flat().forEach(cell => cell.setAttribute("fill", palette[4]));
+        cells.forEach(cell => cell.setAttribute("fill", palette[4]));
       });
     }
 
     function play() {
-      timerIds = [];
-      const start = performance.now();
-      const delayMs = 1000 / fps;
-      function drawFrame(frameNum) {
-        for (const [x, y, i] of frames[frameNum]) {
-          grid[x][y].setAttribute("fill", palette[i]);
+      playing = true;
+      drawnFrames = 0;
+      let start;
+      let lastFrameIdx;
+      let lastFrame = [];
+
+      function drawFrame(now) {
+        const currentFrameIdx = Math.min(Math.trunc((now - start) / frameDurationMs), frames.length - 1);
+        if (currentFrameIdx === lastFrameIdx) {
+          return;
         }
-        if (frameNum === frames.length - 1) {
-          const actual = performance.now() - start;
-          const expected = delayMs * frames.length;
-          console.log(`Play time ${actual}, expected ${expected}`);
+        const currentFrame = frames[currentFrameIdx];
+        for (let i = 0; i < cells.length; i++) {
+          if (currentFrame[i] !== lastFrame[i]) {
+            cells[i].setAttribute("fill", palette[currentFrame[i]]);
+          }
         }
+        drawnFrames++;
+        lastFrameIdx = currentFrameIdx;
+        lastFrame = currentFrame;
       }
 
-      for (let i = 0; i < frames.length; i++) {
-        const id = setTimeout(() => drawFrame(i), i * delayMs);
-        timerIds.push(id);
+      function drawFrameWrapper(now) {
+        if (!playing) {
+          return;
+        }
+        if (start === undefined) {
+          start = now;
+        }
+        drawFrame(now);
+        window.requestAnimationFrame(drawFrameWrapper);
       }
+      window.requestAnimationFrame(drawFrameWrapper);
     }
 
-    function stop() {
-      timerIds.forEach(id => clearTimeout(id));
+    async function stop() {
+      playing = false;
+      await delay(50); // Wait a bit in case the last frame is still being drawn
+      console.log(`Animation stopped, drawn frames ${drawnFrames}/${frames.length}`);
+      drawnFrames = null;
     }
 
     async function afterStop() {
       await transitionCellFills(() => {
         originalFills.forEach(([cell, fill]) => cell.setAttribute("fill", fill));
       });
-      grid = null;
+      cells = null;
       originalFills = null;
     }
 
@@ -275,7 +305,8 @@
   let state = "stopped";
 
   audio.addEventListener("playing", () => video.play());
-  async function playAll() {
+  async function play() {
+    state = "wait";
     disableSelects();
     await expandGraph();
     await setupCells();
@@ -285,30 +316,23 @@
     state = "playing";
   }
 
-  audio.addEventListener("pause", () => video.stop());
-  async function stopAll() {
-    audio.pause();
-    audio.currentTime = 0;
+  audio.addEventListener("pause", async () => {
+    state = "wait";
+    await video.stop();
     await video.afterStop();
     await setupCells(false);
     await expandGraph(false);
     disableSelects(false);
     button.textContent = "Play";
     state = "stopped";
-  }
-
-  audio.addEventListener("ended", async () => {
-    state = "wait";
-    await stopAll();
   });
 
   button.addEventListener("click", async () => {
-    const stateCopy = state;
-    state = "wait";
-    if (stateCopy === "stopped") {
-      await playAll();
-    } else if (stateCopy === "playing") {
-      await stopAll();
+    if (state === "stopped") {
+      await play();
+    } else if (state === "playing") {
+      audio.pause();
+      audio.currentTime = 0;
     }
   });
 
